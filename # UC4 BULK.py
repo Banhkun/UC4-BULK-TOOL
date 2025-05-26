@@ -61,11 +61,27 @@ class JobCreatorApp:
 
     def __init__(self, root):
         self.root = root
+        self.setup_style()
         self.root.title("Automic Job Creator")
         self.entries = {}
         self.load_config()
         self.build_ui()
         self.populate_fields()
+
+    def setup_style(self):
+        style = ttk.Style()
+        style.theme_use('clam')
+        accent = '#0096D6'
+        bg = '#F0F2F5'
+        font = ('Montserrat', 10)
+        self.root.configure(bg=bg)
+        style.configure('TFrame', background=bg)
+        style.configure('TLabel', background=bg, font=font)
+        style.configure('TEntry', font=font)
+        style.configure('TCombobox', font=font)
+        style.configure('TButton', font=font, background=accent, foreground='white', padding=6)
+        style.map('TButton', background=[('active', '#007BB5')])
+        style.configure('Treeview', font=font, rowheight=24)
 
     def load_config(self):
         try:
@@ -91,85 +107,57 @@ class JobCreatorApp:
     def populate_fields(self):
         cfg = self.config
         if cfg.get('ENV') in self.ENV_OPTIONS:
-            self.env_var.set(cfg['ENV'])
-            self.update_client_options()
+            self.env_var.set(cfg['ENV']); self.update_client_options()
         if cfg.get('CLIENT_ID') in self.CLIENT_MAP.get(self.env_var.get(), []):
             self.client_var.set(cfg['CLIENT_ID'])
         for key in ['USERID', 'PASSWORD', 'ARMT_NO']:
             if cfg.get(key):
                 val = cfg[key]
                 if key=='PASSWORD':
-                    try:
-                        val = base64.b64decode(val).decode()
-                    except:
-                        val = ''
+                    try: val = base64.b64decode(val).decode()
+                    except: val = ''
                 self.entries[key].insert(0, val)
-        if cfg.get('template_job_armt'):
-            self.template_job_armt.insert(0, cfg['template_job_armt'])
-        if cfg.get('template_joplan_armt'):
-            self.template_joplan_armt.insert(0, cfg['template_joplan_armt'])
+        for fld in ['template_job_armt','template_joplan_armt']:
+            if cfg.get(fld): getattr(self, fld).insert(0, cfg[fld])
         if cfg.get('PAIRS_DATA'):
             self.pairs_text.insert('1.0', cfg['PAIRS_DATA'])
 
     def build_ui(self):
-        frm = ttk.Frame(self.root, padding=10)
+        frm = ttk.Frame(self.root, padding=15)
         frm.pack(fill='both', expand=True)
-        # ENV dropdown
-        ttk.Label(frm, text="ENV:").grid(row=0, column=0, sticky='w')
-        self.env_var = tk.StringVar()
-        env_cb = ttk.Combobox(frm, textvariable=self.env_var, values=self.ENV_OPTIONS, state='readonly')
-        env_cb.grid(row=0, column=1, sticky='ew', pady=2)
-        env_cb.bind('<<ComboboxSelected>>', lambda e: self.update_client_options())
-        # CLIENT_ID dropdown
-        ttk.Label(frm, text="CLIENT_ID:").grid(row=1, column=0, sticky='w')
-        self.client_var = tk.StringVar()
-        self.client_cb = ttk.Combobox(frm, textvariable=self.client_var, state='readonly')
-        self.client_cb.grid(row=1, column=1, sticky='ew', pady=2)
-        # Other entries
-        for idx, lb in enumerate(['USERID', 'PASSWORD', 'ARMT_NO'], start=2):
-            ttk.Label(frm, text=f"{lb}:").grid(row=idx, column=0, sticky='w')
-            ent = ttk.Entry(frm, show='*' if lb=='PASSWORD' else None)
-            ent.grid(row=idx, column=1, sticky='ew', pady=2)
-            self.entries[lb] = ent
-        # Pairs
-        ttk.Label(frm, text="PAIRS_DATA:").grid(row=5, column=0, sticky='nw', pady=(10,0))
-        self.pairs_text = tk.Text(frm, height=6)
-        self.pairs_text.grid(row=5, column=1, sticky='ew', pady=(10,2))
+        # ENV & CLIENT
+        ttk.Label(frm,text='Environment:').grid(row=0,column=0,sticky='w')
+        self.env_var=tk.StringVar(); env_cb=ttk.Combobox(frm,textvariable=self.env_var,values=self.ENV_OPTIONS,state='readonly'); env_cb.grid(row=0,column=1,sticky='ew',padx=5, pady=2)
+        env_cb.bind('<<ComboboxSelected>>',lambda e:self.update_client_options())
+        ttk.Label(frm,text='Client ID:').grid(row=0,column=2,sticky='w')
+        self.client_var=tk.StringVar(); self.client_cb=ttk.Combobox(frm,textvariable=self.client_var,state='readonly'); self.client_cb.grid(row=0,column=3,sticky='ew',padx=5,pady=2)
+        # Credentials
+        ttk.Label(frm,text='User ID:').grid(row=1,column=0,sticky='w'); self.entries['USERID']=ttk.Entry(frm); self.entries['USERID'].grid(row=1,column=1,sticky='ew',padx=5)
+        ttk.Label(frm,text='Password:').grid(row=1,column=2,sticky='w'); self.entries['PASSWORD']=ttk.Entry(frm,show='*'); self.entries['PASSWORD'].grid(row=1,column=3,sticky='ew',padx=5)
+        ttk.Label(frm,text='ARMT No.:').grid(row=2,column=0,sticky='w'); self.entries['ARMT_NO']=ttk.Entry(frm); self.entries['ARMT_NO'].grid(row=2,column=1,sticky='ew',padx=5)
         # Templates
-        ttk.Label(frm, text="template_job_armt:").grid(row=6, column=0, sticky='w')
-        self.template_job_armt = ttk.Entry(frm)
-        self.template_job_armt.grid(row=6, column=1, sticky='ew', pady=2)
-        ttk.Label(frm, text="template_joplan_armt:").grid(row=7, column=0, sticky='w')
-        self.template_joplan_armt = ttk.Entry(frm)
-        self.template_joplan_armt.grid(row=7, column=1, sticky='ew', pady=2)
-        # Execute
-        self.run_btn = ttk.Button(frm, text="Create Jobs", command=self.start)
-        self.run_btn.grid(row=8, column=0, columnspan=2, pady=10)
-        # Log
-        ttk.Label(frm, text="Output:").grid(row=9, column=0, sticky='nw')
-        self.log_box = scrolledtext.ScrolledText(frm, height=10, state='disabled')
-        self.log_box.grid(row=9, column=1, sticky='ew')
-        frm.columnconfigure(1, weight=1)
+        ttk.Label(frm,text='Jobplan Template:').grid(row=3,column=0,sticky='w'); self.template_joplan_armt=ttk.Entry(frm); self.template_joplan_armt.grid(row=3,column=1,columnspan=3,sticky='ew',padx=5,pady=2)
+        ttk.Label(frm,text='Jobs Template:').grid(row=4,column=0,sticky='w'); self.template_job_armt=ttk.Entry(frm); self.template_job_armt.grid(row=4,column=1,columnspan=3,sticky='ew',padx=5,pady=2)
+        # Pairs Data
+        ttk.Label(frm,text='Program/Variant Pairs:').grid(row=5,column=0,sticky='nw', pady=(10,2))
+        self.pairs_text=scrolledtext.ScrolledText(frm,height=6); self.pairs_text.grid(row=5,column=1,columnspan=3,sticky='ew',padx=5)
+        # Run Button
+        self.run_btn=ttk.Button(frm,text='Create Jobs',command=self.start); self.run_btn.grid(row=6,column=0,columnspan=4,pady=12)
+        # Output Log
+        ttk.Label(frm,text='Output:').grid(row=7,column=0,sticky='nw')
+        self.log_box=scrolledtext.ScrolledText(frm,height=10,state='disabled'); self.log_box.grid(row=7,column=1,columnspan=3,sticky='ew',padx=5)
+        frm.columnconfigure((1,3),weight=1)
 
     def update_client_options(self):
-        env = self.env_var.get()
-        options = self.CLIENT_MAP.get(env, [])
-        self.client_cb['values'] = options
-        if options:
-            # default to first if not set or invalid
-            curr = self.client_var.get()
-            if curr not in options:
-                self.client_var.set(options[0])
+        opts=self.CLIENT_MAP.get(self.env_var.get(),[])
+        self.client_cb['values']=opts
+        if opts and self.client_var.get() not in opts: self.client_var.set(opts[0])
 
-    def log(self, msg):
-        self.log_box.configure(state='normal')
-        self.log_box.insert('end', msg + '\n')
-        self.log_box.see('end')
-        self.log_box.configure(state='disabled')
+    def log(self,msg):
+        self.log_box.config(state='normal'); self.log_box.insert('end',msg+'\n'); self.log_box.see('end'); self.log_box.config(state='disabled')
 
     def start(self):
-        self.run_btn.config(state='disabled')
-        threading.Thread(target=self.execute, daemon=True).start()
+        self.run_btn.config(state='disabled'); threading.Thread(target=self.execute,daemon=True).start()
 
     def execute(self):
         # Read inputs
@@ -189,35 +177,42 @@ class JobCreatorApp:
         auth = base64.b64encode(f"{user}:{pwd}".encode()).decode()
         automic.connection(url=api_url, auth=auth, noproxy=True, sslverify=False)
 
-        # Fetch
-        self.log(f"Fetching {t_joplan} and {t_job}")
-        rp = automic.getObjects(client_id=cid, object_name=t_joplan)
-        tmpl_jobp = rp.response['data']['jobp']
+        # Fetch templates
+        if t_joplan:
+            self.log(f"Fetching jobplan {t_joplan}")
+            rp = automic.getObjects(client_id=cid, object_name=t_joplan)
+            tmpl_jobp = rp.response['data']['jobp']
+            base_jobp = tmpl_jobp['general_attributes']['name'][:31]
+        else:
+            tmpl_jobp = None
+            base_jobp = ''
+
+        self.log(f"Fetching job {t_job}")
         rj = automic.getObjects(client_id=cid, object_name=t_job)
         tmpl_jobs = rj.response['data']['jobs']
-        base_jobp = tmpl_jobp['general_attributes']['name'][:31]
-        base_jobs = tmpl_jobp['general_attributes']['name'][:21]
+        base_jobs = tmpl_jobs['general_attributes']['name'][:21]
 
-        # Pairs
+        # Parse pairs and default login
         pairs = parse_flexible_pairs(raw)
-
-        # Default login
         default_login = extract_default_login(tmpl_jobs)
 
         # Loop create
+        jobps = []
         for p in pairs:
             jn = p['jobname']
-            name_jobp = f"{base_jobp}_{jn}"
+            if tmpl_jobp:
+                name_jobp = f"{base_jobp}_{jn}"
+                jobps.append(name_jobp)
+                njp = copy.deepcopy(tmpl_jobp)
+                njp['general_attributes']['name'] = name_jobp
+                for wf in njp.get('workflow_definitions', []):
+                    if wf.get('object_name') == tmpl_jobs['general_attributes']['name']:
+                        wf['object_name'] = f"{base_jobs}_{jn}"
+                res_p = automic.postObjects(client_id=cid, body={'total':1,'data':{'jobp':njp},'path':f'AUTOMATION_JOBS/{user}/{armt}','client':cid,'hasmore':False})
+                self.log(f"JOBP: {name_jobp}" if res_p.status==None else f"FAIL JOBP: {name_jobp} ({res_p.status})")
+
             name_jobs = f"{base_jobs}_{jn}"
-
-            njp = copy.deepcopy(tmpl_jobp)
-            njp['general_attributes']['name'] = name_jobp
-            for wf in njp.get('workflow_definitions', []):
-                if wf.get('object_name') == tmpl_jobs['general_attributes']['name']:
-                    wf['object_name'] = name_jobs
-            res_p = automic.postObjects(client_id=cid, body={'total':1,'data':{'jobp':njp},'path':f'AUTOMATION_JOBS/{user}/{armt}','client':cid,'hasmore':False})
-            self.log(f"JOBP: {name_jobp}" if res_p.status==200 else f"FAIL JOBP: {name_jobp} ({res_p.status})")
-
+            # Create JOBS_R3
             login_val = f"LOGIN_R3_060_{p.get('login', default_login)}"
             script = [
                 f":INC BSH_XXXX_INC_MIGRATION_SIMULATION WAIT_TIME = \"<Random number ...>\" ,NOFOUND=IGNORE",
@@ -231,7 +226,7 @@ class JobCreatorApp:
                 if 'process' in proc:
                     proc['process'] = script
             res_j = automic.postObjects(client_id=cid, body={'total':1,'data':{'jobs':nj},'path':f'AUTOMATION_JOBS/{user}/{armt}','client':cid,'hasmore':False})
-            self.log(f"JOBS: {name_jobs}" if res_j.status==200 else f"FAIL JOBS: {name_jobs} ({res_j.status})")
+            self.log(f"JOBS: {name_jobs}" if res_j.status==None else f"FAIL JOBS: {name_jobs} ({res_j.status})")
 
         self.log("All done.")
         self.run_btn.config(state='normal')
