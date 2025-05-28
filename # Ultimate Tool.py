@@ -23,6 +23,7 @@ def sanitize_string(s):
 
 def parse_flexible_pairs(data):
     headers_by_length = {
+        1: ["jobp"],
         3: ["jobname", "program", "variant"],
         4: ["jobname", "program", "variant", "user"],
         5: ["jobname", "program", "variant", "user", "language"],
@@ -30,7 +31,10 @@ def parse_flexible_pairs(data):
     }
     parsed = []
     for line in data.strip().splitlines():
-        parts = line.strip().split()
+        line = line.strip()
+        if not line:  # Skip blank lines
+            continue
+        parts = line.split()
         n = len(parts)
         if n == 2:
             program, variant = parts
@@ -40,6 +44,7 @@ def parse_flexible_pairs(data):
             parsed.append(dict(zip(headers_by_length[n], parts)))
         else:
             parsed.append({f"col_{i+1}": v for i, v in enumerate(parts)})
+    print(parsed)
     return parsed
 
 def extract_default_login(template_jobs):
@@ -54,6 +59,24 @@ def extract_default_login(template_jobs):
 #----------------------------
 # JobCreatorApp
 #----------------------------
+import tkinter as tk
+from tkinter import ttk, scrolledtext, messagebox, font, filedialog
+import threading
+import base64
+import automic_rest as automic
+import copy
+import re
+import os
+import json
+import sys
+import pandas as pd
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import requests
+import uuid
+
+# ... (Existing helper functions: sanitize_string, parse_flexible_pairs, extract_default_login remain unchanged)
+
 class JobCreatorApp:
     CONFIG_PATH = os.path.join(os.path.expanduser('~'), '.automic_tools.json')
 
@@ -63,6 +86,8 @@ class JobCreatorApp:
         self.client_var = client_var
         self.entries = entries
         self.client_map = client_map
+        self.jobs_list = []  # Store created job names
+        self.jobps_list = []  # Store created job plan names
         self.load_config()
         self.build_ui()
         self.populate_fields()
@@ -142,6 +167,11 @@ class JobCreatorApp:
         ttk.Label(frm, text='Output:').grid(row=5, column=0, sticky='nw')
         self.log_box = scrolledtext.ScrolledText(frm, height=10, state='disabled')
         self.log_box.grid(row=5, column=1, columnspan=3, sticky='ew', padx=5)
+        # New Buttons for Copying Lists
+        self.copy_jobs_btn = ttk.Button(frm, text='Copy JOBS List', command=self.copy_jobs_list)
+        self.copy_jobs_btn.grid(row=6, column=1, sticky='w', padx=5, pady=5)
+        self.copy_jobps_btn = ttk.Button(frm, text='Copy JOBP List', command=self.copy_jobps_list)
+        self.copy_jobps_btn.grid(row=6, column=2, sticky='w', padx=5, pady=5)
         frm.columnconfigure((1, 3), weight=1)
         self.toggle_main_fields()
 
@@ -155,6 +185,30 @@ class JobCreatorApp:
             self.main_entry.grid_remove()
             self.predecessor_chk.grid_remove()
 
+    def copy_jobs_list(self):
+        """Copy the list of created job names to the clipboard."""
+        if not self.jobs_list:
+            self.log("No jobs list available to copy.")
+            messagebox.showinfo("Info", "No jobs list available to copy.")
+            return
+        jobs_text = "\n".join(self.jobs_list)
+        self.parent.clipboard_clear()
+        self.parent.clipboard_append(jobs_text)
+        self.parent.update()
+        self.log("Copied JOBS list to clipboard.")
+
+    def copy_jobps_list(self):
+        """Copy the list of created job plan names to the clipboard."""
+        if not self.jobps_list:
+            self.log("No job plans list available to copy.")
+            messagebox.showinfo("Info", "No job plans list available to copy.")
+            return
+        jobps_text = "\n".join(self.jobps_list)
+        self.parent.clipboard_clear()
+        self.parent.clipboard_append(jobps_text)
+        self.parent.update()
+        self.log("Copied JOBP list to clipboard.")
+
     def update_client_options(self):
         opts = self.client_map.get(self.env_var.get(), [])
         self.client_cb['values'] = opts
@@ -165,7 +219,7 @@ class JobCreatorApp:
         self.log_box.insert('end', msg + '\n')
         self.log_box.see('end')
         self.log_box.config(state='disabled')
-        self.parent.update_idletasks()  # Ensure UI updates
+        self.parent.update_idletasks()
 
     def start(self):
         self.run_btn.config(state='disabled')
@@ -173,6 +227,8 @@ class JobCreatorApp:
 
     def execute(self):
         try:
+            self.jobs_list = []  # Reset jobs list
+            self.jobps_list = []  # Reset job plans list
             env = self.env_var.get().strip()
             try:
                 cid = int(self.client_var.get().strip())
@@ -194,11 +250,6 @@ class JobCreatorApp:
             if not user or not pwd:
                 self.parent.after(0, lambda: self.log("Error: User ID and Password are required"))
                 self.parent.after(0, lambda: messagebox.showerror("Error", "Please provide both User ID and Password"))
-                return
-
-            if not t_job:
-                self.parent.after(0, lambda: self.log("Error: Job Template is required"))
-                self.parent.after(0, lambda: messagebox.showerror("Error", "Please provide a Job Template name"))
                 return
 
             self.save_config()
@@ -242,95 +293,123 @@ class JobCreatorApp:
                     return
 
             # Fetch job template
-            self.parent.after(0, lambda: self.log(f"Fetching job {t_job}"))
-            try:
-                rj = automic.getObjects(client_id=cid, object_name=t_job)
-                if rj.status!=200:
-                    self.parent.after(0, lambda: self.log(f"Failed to fetch job {t_job}: {rj.status}"))
-                    self.parent.after(0, lambda: messagebox.showerror("Error", f"Failed to fetch job {t_job}: {rj.status}"))
+            if t_job:
+                self.parent.after(0, lambda: self.log(f"Fetching job {t_job}"))
+                try:
+                    rj = automic.getObjects(client_id=cid, object_name=t_job)
+                    if rj.status != 200:
+                        self.parent.after(0, lambda: self.log(f"Failed to fetch job {t_job}: {rj.status}"))
+                        self.parent.after(0, lambda: messagebox.showerror("Error", f"Failed to fetch job {t_job}: {rj.status}"))
+                        return
+                    if 'data' not in rj.response or 'jobs' not in rj.response['data']:
+                        self.parent.after(0, lambda: self.log(f"Error: Job {t_job} not found or invalid response"))
+                        self.parent.after(0, lambda: messagebox.showerror("Error", f"Job {t_job} not found or invalid response from server"))
+                        return
+                    tmpl_jobs = rj.response['data']['jobs']
+                    if cid == 1111:
+                        base_jobs = tmpl_jobs['general_attributes']['name'][:21]
+                    else:
+                        base_jobs = tmpl_jobs['general_attributes']['name'][:15]
+                except requests.exceptions.HTTPError as e:
+                    self.parent.after(0, lambda: self.log(f"HTTP error fetching job {t_job}: {str(e)}"))
+                    self.parent.after(0, lambda: messagebox.showerror("HTTP Error", f"Failed to fetch job {t_job}: {str(e)}"))
                     return
-                if 'data' not in rj.response or 'jobs' not in rj.response['data']:
-                    self.parent.after(0, lambda: self.log(f"Error: Job {t_job} not found or invalid response"))
-                    self.parent.after(0, lambda: messagebox.showerror("Error", f"Job {t_job} not found or invalid response from server"))
+                except Exception as e:
+                    self.parent.after(0, lambda: self.log(f"Unexpected error fetching job {t_job}: {str(e)}"))
+                    self.parent.after(0, lambda: messagebox.showerror("Error", f"Unexpected error fetching job {t_job}: {str(e)}"))
                     return
-                tmpl_jobs = rj.response['data']['jobs']
-                if cid == 1111:
-                    base_jobs = tmpl_jobs['general_attributes']['name'][:21]
-                else:
-                    base_jobs = tmpl_jobs['general_attributes']['name'][:15]
-            except requests.exceptions.HTTPError as e:
-                self.parent.after(0, lambda: self.log(f"HTTP error fetching job {t_job}: {str(e)}"))
-                self.parent.after(0, lambda: messagebox.showerror("HTTP Error", f"Failed to fetch job {t_job}: {str(e)}"))
-                return
-            except Exception as e:
-                self.parent.after(0, lambda: self.log(f"Unexpected error fetching job {t_job}: {str(e)}"))
-                self.parent.after(0, lambda: messagebox.showerror("Error", f"Unexpected error fetching job {t_job}: {str(e)}"))
-                return
 
-            # Parse pairs and default login
+                default_login = extract_default_login(tmpl_jobs)
             pairs = parse_flexible_pairs(raw)
-            default_login = extract_default_login(tmpl_jobs)
 
             # Create jobplans and jobs
-            jobps = []
-            for p in pairs:
-                jn = p['jobname']
-                if tmpl_jobp:
-                    name_jobp = f"{base_jobp}_{jn}"
-                    jobps.append(name_jobp)
-                    njp = copy.deepcopy(tmpl_jobp)
-                    njp['general_attributes']['name'] = name_jobp
-                    for wf in njp.get('workflow_definitions', []):
-                        if wf.get('object_name') == tmpl_jobs['general_attributes']['name']:
-                            wf['object_name'] = f"{base_jobs}_{jn}"
+            self.jobps_list = []  # Ensure list is reset
+            self.jobs_list = []   # Ensure list is reset
+            if pairs[0].get("jobp"):
+                t_joplan = pairs[0]["jobp"]
+                self.parent.after(0, lambda: self.log(f"Fetching jobplan {t_joplan}"))
+                try:
+                    rp = automic.getObjects(client_id=cid, object_name=t_joplan)
+                    if rp.status != 200:
+                        self.parent.after(0, lambda: self.log(f"Failed to fetch jobplan {t_joplan}: {rp.status}"))
+                        self.parent.after(0, lambda: messagebox.showerror("Error", f"Failed to fetch jobplan {t_joplan}: {rp.status}"))
+                        return
+                    if 'data' not in rp.response or 'jobp' not in rp.response['data']:
+                        self.parent.after(0, lambda: self.log(f"Error: Jobplan {t_joplan} not found or invalid response"))
+                        self.parent.after(0, lambda: messagebox.showerror("Error", f"Jobplan {t_joplan} not found or invalid response from server"))
+                        return
+                    tmpl_jobp = rp.response['data']['jobp']
+                except requests.exceptions.HTTPError as e:
+                    self.parent.after(0, lambda: self.log(f"HTTP error fetching jobplan {t_joplan}: {str(e)}"))
+                    self.parent.after(0, lambda: messagebox.showerror("HTTP Error", f"Failed to fetch jobplan {t_joplan}: {str(e)}"))
+                    return
+                except Exception as e:
+                    self.parent.after(0, lambda: self.log(f"Unexpected error fetching jobplan {t_joplan}: {str(e)}"))
+                    self.parent.after(0, lambda: messagebox.showerror("Error", f"Unexpected error fetching jobplan {t_joplan}: {str(e)}"))
+                    return
+                for p in pairs:
+                    self.jobps_list.append(p['jobp'])
+            else:
+                for p in pairs:
+                    jn = p['jobname']
+                    if tmpl_jobp:
+                        name_jobp = f"{base_jobp}_{jn}"
+                        self.jobps_list.append(name_jobp)
+                        njp = copy.deepcopy(tmpl_jobp)
+                        njp['general_attributes']['name'] = name_jobp
+                        for wf in njp.get('workflow_definitions', []):
+                            if wf.get('object_name') == tmpl_jobs['general_attributes']['name']:
+                                wf['object_name'] = f"{base_jobs}_{jn}"
+                        try:
+                            res_p = automic.postObjects(client_id=cid, body={'total':1,'data':{'jobp':njp},'path':f'AUTOMATION_JOBS/{user}/{armt}','client':cid,'hasmore':False})
+                            self.parent.after(0, lambda: self.log(f"JOBP: {name_jobp}" if res_p.status is None else f"FAIL JOBP: {name_jobp} ({res_p.status})"))
+                        except requests.exceptions.HTTPError as e:
+                            self.parent.after(0, lambda: self.log(f"HTTP error creating jobplan {name_jobp}: {str(e)}"))
+                            continue
+                        except Exception as e:
+                            self.parent.after(0, lambda: self.log(f"Unexpected error creating jobplan {name_jobp}: {str(e)}"))
+                            continue
+
+                    name_jobs = f"{base_jobs}_{jn}"
+                    self.jobs_list.append(name_jobs)
+                    login_val = f"LOGIN_R3_060_{p.get('login', default_login)}"
+                    if cid == 1111:
+                        script = [
+                            f":INC BSH_XXXX_INC_MIGRATION_SIMULATION WAIT_TIME = \"<Random number ...>\" ,NOFOUND=IGNORE",
+                            f":PUT_ATT JOB_NAME= \"{jn}\"",
+                            f":PUT_ATT LOGIN='{login_val}'",
+                            f"R3_ACTIVATE_REPORT REPORT='{p['program']}',VARIANT='{p['variant']}',COPIES=1,EXPIR=8,LINE_COUNT=65,LINE_SIZE=80,LAYOUT=X_FORMAT,DATA_SET=LIST1S,TYPE=TEXT"
+                        ]
+                    else:
+                        script = (
+                            ([f':PUT_ATT JOB_NAME= "{jn}"'] if not p.get('isBSH') else [])
+                            + [f"R3_ACTIVATE_REPORT REPORT='{p['program']}',VARIANT='{p['variant']}'"]
+                        )
+                    nj = copy.deepcopy(tmpl_jobs)
+                    nj['general_attributes']['name'] = name_jobs
+                    for proc in nj.get('scripts', []):
+                        if 'process' in proc:
+                            proc['process'] = script
                     try:
-                        res_p = automic.postObjects(client_id=cid, body={'total':1,'data':{'jobp':njp},'path':f'AUTOMATION_JOBS/{user}/{armt}','client':cid,'hasmore':False})
-                        self.parent.after(0, lambda: self.log(f"JOBP: {name_jobp}" if res_p.status is None else f"FAIL JOBP: {name_jobp} ({res_p.status})"))
+                        res_j = automic.postObjects(client_id=cid, body={'total':1,'data':{'jobs':nj},'path':f'AUTOMATION_JOBS/{user}/{armt}','client':cid,'hasmore':False})
+                        self.parent.after(0, lambda: self.log(f"JOBS: {name_jobs}" if res_j.status is None else f"FAIL JOBS: {name_jobs} ({res_j.status})"))
                     except requests.exceptions.HTTPError as e:
-                        self.parent.after(0, lambda: self.log(f"HTTP error creating jobplan {name_jobp}: {str(e)}"))
+                        self.parent.after(0, lambda: self.log(f"HTTP error creating job {name_jobs}: {str(e)}"))
                         continue
                     except Exception as e:
-                        self.parent.after(0, lambda: self.log(f"Unexpected error creating jobplan {name_jobp}: {str(e)}"))
+                        self.parent.after(0, lambda: self.log(f"Unexpected error creating job {name_jobs}: {str(e)}"))
                         continue
-
-                name_jobs = f"{base_jobs}_{jn}"
-                login_val = f"LOGIN_R3_060_{p.get('login', default_login)}"
-                if cid == 1111:
-                    script = [
-                        f":INC BSH_XXXX_INC_MIGRATION_SIMULATION WAIT_TIME = \"<Random number ...>\" ,NOFOUND=IGNORE",
-                        f":PUT_ATT JOB_NAME= \"{jn}\"",
-                        f":PUT_ATT LOGIN='{login_val}'",
-                        f"R3_ACTIVATE_REPORT REPORT='{p['program']}',VARIANT='{p['variant']}',COPIES=1,EXPIR=8,LINE_COUNT=65,LINE_SIZE=80,LAYOUT=X_FORMAT,DATA_SET=LIST1S,TYPE=TEXT"
-                    ]
-                else:
-                    script = (
-                        ([f':PUT_ATT JOB_NAME= "{jn}"'] if not p.get('isBSH') else [])
-                        + [f"R3_ACTIVATE_REPORT REPORT='{p['program']}',VARIANT='{p['variant']}'"]
-                    )
-                nj = copy.deepcopy(tmpl_jobs)
-                nj['general_attributes']['name'] = name_jobs
-                for proc in nj.get('scripts', []):
-                    if 'process' in proc:
-                        proc['process'] = script
-                try:
-                    res_j = automic.postObjects(client_id=cid, body={'total':1,'data':{'jobs':nj},'path':f'AUTOMATION_JOBS/{user}/{armt}','client':cid,'hasmore':False})
-                    self.parent.after(0, lambda: self.log(f"JOBS: {name_jobs}" if res_j.status is None else f"FAIL JOBS: {name_jobs} ({res_j.status})"))
-                except requests.exceptions.HTTPError as e:
-                    self.parent.after(0, lambda: self.log(f"HTTP error creating job {name_jobs}: {str(e)}"))
-                    continue
-                except Exception as e:
-                    self.parent.after(0, lambda: self.log(f"Unexpected error creating job {name_jobs}: {str(e)}"))
-                    continue
 
             # Create main jobplan
             is_predecessor_var = self.is_predecessor_var.get()
             if create_main and main_name and tmpl_jobp:
+                self.jobps_list.append(main_name)
                 data = tmpl_jobp
                 start_node = next(obj for obj in data['workflow_definitions'] if obj['object_type'] == '<START>')
                 end_node = next(obj for obj in data['workflow_definitions'] if obj['object_type'] == '<END>')
                 new_defs = [start_node]
                 line_no = 2
-                for jp in jobps:
+                for jp in self.jobps_list[:-1]:  # Exclude main jobplan
                     new_node = {
                         'line_number': line_no,
                         'object_type': 'JOBP',
