@@ -110,7 +110,8 @@ class JobCreatorApp:
             'template_joplan_armt': self.template_joplan_armt.get(),
             'PAIRS_DATA': self.pairs_text.get('1.0', 'end'),
             'CREATE_MAIN': self.create_main_var.get(),
-            'JOBP_MAIN_NAME': self.jobp_main_entry.get()
+            'JOBP_MAIN_NAME': self.jobp_main_entry.get(),
+            'IS_MAIN_JOBP': self.is_main_jobp_var.get()
         }
         with open(self.CONFIG_PATH, 'w') as f:
             json.dump(data, f)
@@ -127,6 +128,7 @@ class JobCreatorApp:
         self.create_main_var.set(cfg.get('CREATE_MAIN', False))
         self.toggle_main_fields()
         self.jobp_main_entry.insert(0, cfg.get('JOBP_MAIN_NAME', ''))
+        self.is_main_jobp_var.set(cfg.get('IS_MAIN_JOBP', True))
 
     def build_ui(self):
         frm = ttk.Frame(self.parent, padding=15)
@@ -146,6 +148,7 @@ class JobCreatorApp:
         self.create_main_var = tk.BooleanVar()
         chk = ttk.Checkbutton(frm, text='Create Main Jobplan', variable=self.create_main_var, command=self.toggle_main_fields)
         chk.grid(row=0, column=2, sticky='w')
+        # Sequential option
         self.is_predecessor_var = tk.BooleanVar()
         self.predecessor_chk = ttk.Checkbutton(frm, text='Use Sequential Predecessors', variable=self.is_predecessor_var)
         self.predecessor_chk.grid(row=1, column=2, columnspan=2, sticky='w')
@@ -154,6 +157,10 @@ class JobCreatorApp:
         self.jobp_main_entry = self.main_entry
         self.main_label.grid(row=2, column=2, sticky='w')
         self.main_entry.grid(row=2, column=3, sticky='ew', padx=5)
+        # main jobp option
+        self.is_main_jobp_var = tk.BooleanVar()
+        self.main_jobp_chk = ttk.Checkbutton(frm, text='Main Contains Jobplans', variable=self.is_main_jobp_var)
+        self.main_jobp_chk.grid(row=0, column=3, sticky='w')
         # Pairs Data
         ttk.Label(frm, text='Program/Variant Pairs:').grid(row=3, column=0, sticky='nw', pady=(10, 2))
         self.pairs_text = scrolledtext.ScrolledText(frm, height=6, undo=True, autoseparators=True, maxundo=-1)
@@ -180,10 +187,12 @@ class JobCreatorApp:
             self.main_label.grid()
             self.main_entry.grid()
             self.predecessor_chk.grid()
+            self.main_jobp_chk.grid()
         else:
             self.main_label.grid_remove()
             self.main_entry.grid_remove()
             self.predecessor_chk.grid_remove()
+            self.main_jobp_chk.grid_remove()
 
     def copy_jobs_list(self):
         """Copy the list of created job names to the clipboard."""
@@ -246,7 +255,7 @@ class JobCreatorApp:
             raw = self.pairs_text.get('1.0', 'end')
             create_main = self.create_main_var.get()
             main_name = self.jobp_main_entry.get().strip()
-
+            is_main_jobp = self.is_main_jobp_var.get()
             if not user or not pwd:
                 self.parent.after(0, lambda: self.log("Error: User ID and Password are required"))
                 self.parent.after(0, lambda: messagebox.showerror("Error", "Please provide both User ID and Password"))
@@ -325,6 +334,7 @@ class JobCreatorApp:
             # Create jobplans and jobs
             self.jobps_list = []  # Ensure list is reset
             self.jobs_list = []   # Ensure list is reset
+        
             if pairs[0].get("jobp"):
                 t_joplan = pairs[0]["jobp"]
                 self.parent.after(0, lambda: self.log(f"Fetching jobplan {t_joplan}"))
@@ -403,32 +413,54 @@ class JobCreatorApp:
             # Create main jobplan
             is_predecessor_var = self.is_predecessor_var.get()
             if create_main and main_name and tmpl_jobp:
-                self.jobps_list.append(main_name)
+                # self.jobps_list.append(main_name)
                 data = tmpl_jobp
                 start_node = next(obj for obj in data['workflow_definitions'] if obj['object_type'] == '<START>')
                 end_node = next(obj for obj in data['workflow_definitions'] if obj['object_type'] == '<END>')
                 new_defs = [start_node]
                 line_no = 2
-                for jp in self.jobps_list[:-1]:  # Exclude main jobplan
-                    new_node = {
-                        'line_number': line_no,
-                        'object_type': 'JOBP',
-                        'object_name': jp,
-                        'precondition_error_action': 'H',
-                        'predecessors': 1,
-                        'active': 1,
-                        'mrt_time': '000000',
-                        'childflags': '0000000000000000',
-                        'rollback_enabled': 1
-                    }
-                    if is_predecessor_var:
-                        new_node['row'] = 1
-                        new_node['column'] = line_no
-                    else:
-                        new_node['row'] = line_no - 1
-                        new_node['column'] = 2
-                    new_defs.append(new_node)
-                    line_no += 1
+                if is_main_jobp:
+                    for jp in self.jobps_list:  # Exclude main jobplan
+                        new_node = {
+                            'line_number': line_no,
+                            'object_type': 'JOBP',
+                            'object_name': jp,
+                            'precondition_error_action': 'H',
+                            'predecessors': 1,
+                            'active': 1,
+                            'mrt_time': '000000',
+                            'childflags': '0000000000000000',
+                            'rollback_enabled': 1
+                        }
+                        if is_predecessor_var:
+                            new_node['row'] = 1
+                            new_node['column'] = line_no
+                        else:
+                            new_node['row'] = line_no - 1
+                            new_node['column'] = 2
+                        new_defs.append(new_node)
+                        line_no += 1
+                else:
+                    for j in self.jobs_list:  # Exclude main jobplan
+                        new_node = {
+                            'line_number': line_no,
+                            'object_type': 'JOBS',
+                            'object_name':j,
+                            'precondition_error_action': 'H',
+                            'predecessors': 1,
+                            'active': 1,
+                            'mrt_time': '000000',
+                            'childflags': '0000000000000000',
+                            'rollback_enabled': 1
+                        }
+                        if is_predecessor_var:
+                            new_node['row'] = 1
+                            new_node['column'] = line_no
+                        else:
+                            new_node['row'] = line_no - 1
+                            new_node['column'] = 2
+                        new_defs.append(new_node)
+                        line_no += 1
                 end_node['predecessors'] = line_no - 2
                 end_node['line_number'] = line_no
                 end_node['row'] = 1
